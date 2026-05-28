@@ -1,0 +1,135 @@
+diff --git a/GobiUSBNet.c b/GobiUSBNet.c
+index 689c173..46daf0b 100644
+--- a/GobiUSBNet.c
++++ b/GobiUSBNet.c
+@@ -58,6 +58,11 @@ POSSIBILITY OF SUCH DAMAGE.
+ #include <linux/kernel.h>
+ #include <linux/ethtool.h>
+ #include <linux/version.h>
++#include <linux/string.h>
++
++#ifndef strlcpy
++#define strlcpy(dest, src, size) strscpy(dest, src, size)
++#endif
+ 
+ #include <net/arp.h>
+ #include <net/ip.h>
+@@ -306,7 +311,11 @@ static int bridge_arp_reply(struct net_device *net, struct sk_buff *skb, uint br
+             reply->ip_summed = CHECKSUM_UNNECESSARY;
+             reply->pkt_type = PACKET_HOST;
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 18, 0)
++            netif_rx(reply);
++#else
+             netif_rx_ni(reply);
++#endif
+         }
+         return 1;
+     }
+@@ -929,8 +938,12 @@ static int qmap_register_device(sGobiUSBNet * pDev, u8 offset_id)
+ 	priv->dl_minimum_padding = 0;
+ 	priv->agg_skb = NULL;
+ 	priv->agg_count = 0;
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
++  hrtimer_setup(&priv->agg_hrtimer, rmnet_usb_tx_agg_timer_cb, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
++#else
+ 	hrtimer_init(&priv->agg_hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+ 	priv->agg_hrtimer.function = rmnet_usb_tx_agg_timer_cb;
++#endif
+ 	INIT_WORK(&priv->agg_wq, rmnet_usb_tx_agg_work);
+ 	ktime_get_ts64(&priv->agg_time);
+ 	spin_lock_init(&priv->agg_lock);
+@@ -944,7 +957,11 @@ static int qmap_register_device(sGobiUSBNet * pDev, u8 offset_id)
+ #else
+     qmap_net->netdev_ops = &qmap_netdev_ops;
+ #endif
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 17, 0)
++    eth_hw_addr_set(qmap_net, real_dev->dev_addr);
++#else
+     memcpy (qmap_net->dev_addr, real_dev->dev_addr, ETH_ALEN);
++#endif
+ 
+ #ifdef QUECTEL_BRIDGE_MODE
+ 	priv->m_bridge_mode = !!(pDev->m_bridge_mode & BIT(offset_id));
+@@ -1289,6 +1306,7 @@ static int GobiNetSuspend(
+    // Run usbnet's suspend function
+    return usbnet_suspend( pIntf, powerEvent );
+ }
++int QuecGobiNetSuspend(struct usb_interface *pIntf, pm_message_t powerEvent );
+ int QuecGobiNetSuspend(struct usb_interface *pIntf, pm_message_t powerEvent ) {
+ 	return GobiNetSuspend(pIntf, powerEvent);
+ }
+@@ -1537,12 +1555,16 @@ static int GobiNetDriverBind(
+ 
+ #if 1 //def DATA_MODE_RP
+     /* make MAC addr easily distinguishable from an IP header */
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 17, 0)
++    eth_hw_addr_set(pDev->net, node_id);
++#else
+     if ((pDev->net->dev_addr[0] & 0xd0) == 0x40) {
+         /*clear this bit wil make usbnet apdater named as usbX(instead if ethX)*/
+         pDev->net->dev_addr[0] |= 0x02;	/* set local assignment bit */
+         pDev->net->dev_addr[0] &= 0xbf;	/* clear "IP" bit */
+     }
+     memcpy (pDev->net->dev_addr, node_id, sizeof node_id);
++#endif
+     pDev->net->flags &= ~(IFF_BROADCAST | IFF_MULTICAST);
+     pDev->net->features |= (NETIF_F_VLAN_CHALLENGED);
+ #endif
+@@ -2957,7 +2979,9 @@ static int GobiUSBNetProbe(
+    memset( &(pGobiDev->mMEID), '0', 14 );
+    
+    DBG( "Mac Address:\n" );
+-   PrintHex( &pGobiDev->mpNetDev->net->dev_addr[0], 6 );
++   char pGobiDevAddr[6];
++   memcpy(pGobiDevAddr, pGobiDev->mpNetDev->net->dev_addr, sizeof(pGobiDevAddr));
++   PrintHex( pGobiDevAddr, 6 );
+ 
+    pGobiDev->mbQMIValid = false;
+    memset( &pGobiDev->mQMIDev, 0, sizeof( sQMIDev ) );
+@@ -3149,7 +3173,11 @@ RETURN VALUE:
+ ===========================================================================*/
+ static int __init GobiUSBNetModInit( void )
+ {
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
++   gpClass = class_create( "GobiQMI" );
++#else
+    gpClass = class_create( THIS_MODULE, "GobiQMI" );
++#endif
+    if (IS_ERR( gpClass ) == true)
+    {
+       DBG( "error at class_create %ld\n", PTR_ERR( gpClass ) );
+diff --git a/QMI.c b/QMI.c
+index eaf1cac..68513f8 100644
+--- a/QMI.c
++++ b/QMI.c
+@@ -66,7 +66,12 @@ POSSIBILITY OF SUCH DAMAGE.
+ //---------------------------------------------------------------------------
+ // Include Files
+ //---------------------------------------------------------------------------
++#include <linux/version.h>
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
++#include <linux/unaligned.h>
++#else
+ #include <asm/unaligned.h>
++#endif
+ #include <linux/kernel.h>
+ #include "Structs.h"
+ #include "QMI.h"
+diff --git a/QMIDevice.c b/QMIDevice.c
+index fe6b6cf..aec3ce7 100644
+--- a/QMIDevice.c
++++ b/QMIDevice.c
+@@ -90,7 +90,12 @@ POSSIBILITY OF SUCH DAMAGE.
+ //---------------------------------------------------------------------------
+ // Include Files
+ //---------------------------------------------------------------------------
++#include <linux/version.h>
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
++#include <linux/unaligned.h>
++#else
+ #include <asm/unaligned.h>
++#endif
+ #include <linux/module.h>
+ #include <linux/usb/cdc.h>
+ #include <linux/usb.h>

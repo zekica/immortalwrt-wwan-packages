@@ -1,0 +1,682 @@
+diff --git a/pcie/sprd_pcie_ep_device.c b/pcie/sprd_pcie_ep_device.c
+index af6b922..51a759a 100644
+--- a/pcie/sprd_pcie_ep_device.c
++++ b/pcie/sprd_pcie_ep_device.c
+@@ -231,7 +231,11 @@ static void sprd_pcie_iommu_init(struct device *dev)
+ 			dev_info(dev, "sprd_pcie_iommu_init iova:%d have been used", (u32)addr);
+ 			continue;
+ 		}
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 0, 0)
++		ret = iommu_map(domain, addr, addr, pg_size, IOMMU_READ | IOMMU_WRITE, GFP_KERNEL);
++#else
+ 		ret = iommu_map(domain, addr, addr, pg_size, IOMMU_READ | IOMMU_WRITE);
++#endif
+ 		if (ret) {
+ 			dev_info(dev, "sprd_pcie_iommu_init iommu_map failed");
+ 			return;
+diff --git a/power_manager/power_manager.c b/power_manager/power_manager.c
+index 077c31e..6236f65 100644
+--- a/power_manager/power_manager.c
++++ b/power_manager/power_manager.c
+@@ -19,6 +19,19 @@
+ #include <linux/workqueue.h>
+ #include <linux/version.h>
+ 
++#include <linux/timer.h>
++
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 16, 0)
++#ifndef from_timer
++#define from_timer(var, callback_timer, timer_fieldname) \
++    timer_container_of(var, callback_timer, timer_fieldname)
++#endif
++#ifndef del_timer
++#define del_timer(timer) timer_delete(timer)
++#endif
++#endif
++
++
+ #include "../include/sprd_mpm.h"
+ #include "../include/sipc.h"
+ /*
+diff --git a/sipa/sipa_core.c b/sipa/sipa_core.c
+index bcde7e5..82f313f 100644
+--- a/sipa/sipa_core.c
++++ b/sipa/sipa_core.c
+@@ -38,6 +38,7 @@
+ #include <linux/debugfs.h>
+ #include <linux/kthread.h>
+ #include <linux/delay.h>
++#include <linux/version.h>
+ 
+ #include "../include/sipa.h"
+ #include "../include/sprd_pcie_ep_device.h"
+@@ -251,7 +252,11 @@ static int sipa_plat_drv_probe(struct platform_device *pdev)
+ extern void destroy_sipa_skb_receiver(struct sipa_skb_receiver *receiver);
+ extern void destroy_sipa_skb_sender(struct sipa_skb_sender *sender);
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
++static void sipa_plat_drv_remove(struct platform_device *pdev)
++#else
+ static int sipa_plat_drv_remove(struct platform_device *pdev)
++#endif
+ {
+ 	struct sipa_core *ipa;
+ 
+@@ -271,7 +276,9 @@ static int sipa_plat_drv_remove(struct platform_device *pdev)
+ 		debugfs_remove_recursive(ipa->dentry);
+ 	devm_kfree(&pdev->dev, ipa);
+ 	platform_set_drvdata(pdev, NULL);
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 13, 0)
+ 	return 0;
++#endif
+ }
+ 
+ #ifdef SPRD_PCIE_USE_DTS
+diff --git a/sipa/sipa_dummy.c b/sipa/sipa_dummy.c
+index 6d3c8f9..6fb78b6 100644
+--- a/sipa/sipa_dummy.c
++++ b/sipa/sipa_dummy.c
+@@ -35,6 +35,7 @@
+ #include <linux/netdev_features.h>
+ #include <linux/mutex.h>
+ #include <net/arp.h>
++#include <linux/version.h>
+ 
+ #include "sipa_eth.h"
+ #include "sipa_core.h"
+@@ -432,12 +433,19 @@ static int sipa_dummy_probe(struct platform_device *pdev)
+ 	netdev->irq = 0;
+ 	netdev->dma = 0;
+ 	netdev->features &= ~(NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM | NETIF_F_HW_CSUM);
+-	random_ether_addr(netdev->dev_addr);
++	eth_hw_addr_random(netdev);
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
++	netif_napi_add_weight(netdev,
++		       &sipa_dummy->napi,
++		       sipa_dummy_rx_poll_handler,
++		       SIPA_DUMMY_NAPI_WEIGHT);
++#else
+ 	netif_napi_add(netdev,
+ 		       &sipa_dummy->napi,
+ 		       sipa_dummy_rx_poll_handler,
+ 		       SIPA_DUMMY_NAPI_WEIGHT);
++#endif
+ 
+ 	/* Register new Ethernet interface */
+ 	ret = register_netdev(netdev);
+@@ -457,7 +465,11 @@ static int sipa_dummy_probe(struct platform_device *pdev)
+ }
+ 
+ /* Cleanup Ethernet device driver. */
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
++static void sipa_dummy_remove(struct platform_device *pdev)
++#else
+ static int sipa_dummy_remove(struct platform_device *pdev)
++#endif
+ {
+ 	struct SIPA_DUMMY *sipa_dummy= platform_get_drvdata(pdev);
+ 	netif_stop_queue(sipa_dummy->netdev);
+@@ -469,7 +481,9 @@ static int sipa_dummy_remove(struct platform_device *pdev)
+ 	if (!IS_ERR_OR_NULL(dummy_root))
+ 		debugfs_remove_recursive(dummy_root);
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 13, 0)
+ 	return 0;
++#endif
+ }
+ 
+ #ifdef SPRD_PCIE_USE_DTS
+@@ -563,6 +577,7 @@ static void __init sipa_dummy_debugfs_init(void)
+ 		pr_err("failed to create sipa_dummy debugfs dir\n");
+ }
+ 
++int sipa_dummy_init(void);
+ int sipa_dummy_init(void)
+ {
+ 	sipa_dummy_debugfs_init();
+@@ -573,6 +588,7 @@ int sipa_dummy_init(void)
+ }
+ EXPORT_SYMBOL(sipa_dummy_init);
+ 
++void sipa_dummy_exit(void);
+ void sipa_dummy_exit(void)
+ {
+ 	platform_driver_unregister(&sipa_dummy_driver);
+diff --git a/sipa/sipa_eth.c b/sipa/sipa_eth.c
+index c790725..1ee2752 100644
+--- a/sipa/sipa_eth.c
++++ b/sipa/sipa_eth.c
+@@ -36,6 +36,12 @@
+ #include <linux/mutex.h>
+ #include <linux/version.h>
+ #include <linux/debugfs.h>
++#include <asm/setup.h>
++#include <linux/of_address.h>
++
++#ifndef strlcpy
++#define strlcpy(dest, src, size) strscpy(dest, src, size)
++#endif
+ 
+ #include "sipa_eth.h"
+ #include "../include/sipa.h"
+@@ -519,6 +525,8 @@ static struct net_device_stats *sipa_eth_get_stats(struct net_device *dev)
+  * have any ability to calculate a checksum for a pkt.
+  */
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION( 3,11,0 ))
++netdev_features_t sipa_eth_features_check(struct sk_buff *skb, struct net_device *dev,
++					 netdev_features_t features);
+ netdev_features_t sipa_eth_features_check(struct sk_buff *skb, struct net_device *dev,
+ 					 netdev_features_t features)
+ {
+@@ -744,13 +752,20 @@ static int sipa_eth_probe(struct platform_device *pdev)
+ 	netdev->irq = 0;
+ 	netdev->dma = 0;
+ 	netdev->features &= ~(NETIF_F_IP_CSUM | NETIF_F_IPV6_CSUM | NETIF_F_HW_CSUM);
+-	random_ether_addr(netdev->dev_addr);
++	eth_hw_addr_random(netdev);
+         netdev->sysfs_groups[0] = &sipa_eth_attribute_group;
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
++	netif_napi_add_weight(netdev,
++		       &sipa_eth->napi,
++		       sipa_eth_rx_poll_handler,
++		       SIPA_ETH_NAPI_WEIGHT);
++#else
+ 	netif_napi_add(netdev,
+ 		       &sipa_eth->napi,
+ 		       sipa_eth_rx_poll_handler,
+ 		       SIPA_ETH_NAPI_WEIGHT);
++#endif
+ 
+ 	/* Register new Ethernet interface */
+ 	ret = register_netdev(netdev);
+@@ -796,7 +811,11 @@ static int sipa_eth_probe(struct platform_device *pdev)
+ }
+ 
+ /* Cleanup Ethernet device driver. */
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
++static void sipa_eth_remove(struct platform_device *pdev)
++#else
+ static int sipa_eth_remove(struct platform_device *pdev)
++#endif
+ {
+ 	struct SIPA_ETH *sipa_eth = platform_get_drvdata(pdev);
+ 	struct rmnet_nss_cb *nss_cb;
+@@ -826,7 +845,9 @@ static int sipa_eth_remove(struct platform_device *pdev)
+ 	if (!IS_ERR_OR_NULL(sipa_eth->subroot))
+ 		debugfs_remove_recursive(sipa_eth->subroot);
+ 	free_netdev(sipa_eth->netdev);
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 13, 0)
+ 	return 0;
++#endif
+ }
+ 
+ #ifdef SPRD_PCIE_USE_DTS
+@@ -1050,6 +1071,7 @@ static void __init sipa_eth_debugfs_init(void)
+ #include "rmnet_nss.c"
+ #endif
+ 
++int sipa_eth_init(void);
+ int sipa_eth_init(void)
+ {
+ 	sipa_eth_debugfs_init();
+@@ -1067,6 +1089,7 @@ int sipa_eth_init(void)
+ }
+ EXPORT_SYMBOL(sipa_eth_init);
+ 
++void sipa_eth_exit(void);
+ void sipa_eth_exit(void)
+ {
+     int i;
+diff --git a/sipa/sipa_skb_recv.c b/sipa/sipa_skb_recv.c
+index 63c60b9..6831841 100644
+--- a/sipa/sipa_skb_recv.c
++++ b/sipa/sipa_skb_recv.c
+@@ -349,7 +349,7 @@ static void sipa_fill_free_node(struct sipa_skb_receiver *receiver, u32 cnt)
+ }
+ 
+ static void sipa_receiver_notify_cb(void *priv, enum sipa_irq_evt_type evt,
+-				    unsigned long data)
++				    u32 data)
+ {
+ 	struct sipa_core *ctrl = sipa_get_ctrl_pointer();
+ 	struct sipa_skb_receiver *receiver = (struct sipa_skb_receiver *)priv;
+@@ -495,10 +495,14 @@ static int fill_recv_thread(void *data)
+ {
+ 	int ret;
+ 	struct sipa_skb_receiver *receiver = (struct sipa_skb_receiver *)data;
+-	struct sched_param param = {.sched_priority = 92};
+ 	unsigned long flags;
+ 
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION( 5,9,0 ))
++	sched_set_fifo(current);
++#else
++	struct sched_param param = {.sched_priority = 92};
+ 	sched_setscheduler(current, SCHED_RR, &param);
++#endif
+ 
+ 	while (!kthread_should_stop()) {
+ 		ret = wait_event_interruptible(receiver->fill_recv_waitq,
+@@ -598,6 +602,7 @@ void sipa_receiver_add_nic(struct sipa_skb_receiver *receiver,
+ }
+ EXPORT_SYMBOL(sipa_receiver_add_nic);
+ 
++void sipa_reinit_recv_array(struct sipa_skb_receiver *receiver);
+ void sipa_reinit_recv_array(struct sipa_skb_receiver *receiver)
+ {
+ 	if (!receiver) {
+@@ -614,6 +619,8 @@ void sipa_reinit_recv_array(struct sipa_skb_receiver *receiver)
+ 	receiver->recv_array.wp = receiver->recv_array.depth;
+ }
+ 
++int create_sipa_skb_receiver(struct sipa_endpoint *ep,
++			     struct sipa_skb_receiver **receiver_pp);
+ int create_sipa_skb_receiver(struct sipa_endpoint *ep,
+ 			     struct sipa_skb_receiver **receiver_pp)
+ {
+@@ -662,6 +669,7 @@ int create_sipa_skb_receiver(struct sipa_endpoint *ep,
+ }
+ EXPORT_SYMBOL(create_sipa_skb_receiver);
+ 
++void destroy_sipa_skb_receiver(struct sipa_skb_receiver *receiver);
+ void destroy_sipa_skb_receiver(struct sipa_skb_receiver *receiver)
+ {
+         unsigned long flags;
+diff --git a/sipa/sipa_skb_send.c b/sipa/sipa_skb_send.c
+index f70bd16..83f3088 100644
+--- a/sipa/sipa_skb_send.c
++++ b/sipa/sipa_skb_send.c
+@@ -77,7 +77,7 @@ static void sipa_inform_evt_to_nics(struct sipa_skb_sender *sender,
+ }
+ 
+ static void sipa_sender_notify_cb(void *priv, enum sipa_irq_evt_type evt,
+-				  unsigned long data)
++				  u32 data)
+ {
+ 	unsigned long flags;
+ 	struct sipa_skb_sender *sender = (struct sipa_skb_sender *)priv;
+@@ -127,7 +127,7 @@ static void sipa_free_sent_items(struct sipa_skb_sender *sender)
+ 	void __iomem *fifo_base;
+ 	u32 clr_sts = 0;
+ 	u32 int_status = 0;
+-	u32 read_count = 0;
++	// u32 read_count = 0;
+ 
+ 	num = ctrl->hal_ops.recv_node_from_tx_fifo(ctrl->dev, id,
+ 						   ctrl->cmn_fifo_cfg, -1);
+@@ -284,12 +284,16 @@ static void sipa_free_send_skb(struct sipa_skb_sender *sender)
+ static int sipa_free_thread(void *data)
+ {
+ 	struct sipa_skb_sender *sender = (struct sipa_skb_sender *)data;
+-	struct sched_param param = {.sched_priority = 90};
+ 	struct sipa_core *ctrl = sipa_get_ctrl_pointer();
+ 	enum sipa_cmn_fifo_index id = sender->ep->send_fifo->fifo_id;
+     unsigned long flags;
+ 	struct sipa_nic *iter, *_iter;
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION( 5,9,0 ))
++	sched_set_fifo(current);
++#else
++	struct sched_param param = {.sched_priority = 90};
+ 	sched_setscheduler(current, SCHED_RR, &param);
++#endif
+ 
+ 	while (!kthread_should_stop()) {
+ 		wait_event_interruptible(sender->free_waitq,
+diff --git a/sipc/sblock.c b/sipc/sblock.c
+index 730f531..efd1bd3 100644
+--- a/sipc/sblock.c
++++ b/sipc/sblock.c
+@@ -866,7 +866,9 @@ int sblock_create_ex(u8 dst, u8 channel,
+ 	int result;
+ 	u8 ch_index;
+ 	struct smsg_ipc *sipc;
++#if (LINUX_VERSION_CODE < KERNEL_VERSION( 5,9,0 ))
+ 	struct sched_param param = {.sched_priority = 11};
++#endif
+ 
+ 	ch_index = sipc_channel2index(channel);
+ 	if (ch_index == INVALID_CHANEL_INDEX) {
+@@ -918,8 +920,12 @@ int sblock_create_ex(u8 dst, u8 channel,
+ 				return result;
+ 			}
+ 		}
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION( 5,9,0 ))
++		sched_set_fifo_low(sblock->thread);
++#else
+ 		/*set the thread as a real time thread, and its priority is 11*/
+ 		sched_setscheduler(sblock->thread, SCHED_RR, &param);
++#endif
+ 		wake_up_process(sblock->thread);
+ 	}
+ 
+@@ -966,7 +972,9 @@ int sblock_pcfg_create(u8 dst, u8 channel,
+ 				   rx_blk_num, rx_blk_sz,
+ 				   &sblock);
+ 	if (!result) {
++#if (LINUX_VERSION_CODE < KERNEL_VERSION( 5,9,0 ))
+ 		struct sched_param param = {.sched_priority = 11};
++#endif
+ 
+ 		sblock->thread = kthread_create(sblock_thread, sblock,
+ 						"sblock-%d-%d", dst, channel);
+@@ -994,11 +1002,15 @@ int sblock_pcfg_create(u8 dst, u8 channel,
+ 		get_task_struct(sblock->thread);
+ 
+ 		sblocks[dst][ch_index] = sblock;
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION( 5,9,0 ))
++		sched_set_fifo_low(sblock->thread);
++#else
+ 		/*
+ 		 * Set the thread as a real time thread, and its priority
+ 		 * is 11.
+ 		 */
+ 		sched_setscheduler(sblock->thread, SCHED_RR, &param);
++#endif
+ 		wake_up_process(sblock->thread);
+ 	}
+ 
+@@ -1010,7 +1022,6 @@ void sblock_down(u8 dst, u8 channel)
+ {
+ 	struct sblock_mgr *sblock;
+ 	u8 ch_index;
+-    int i;
+ 	ch_index = sipc_channel2index(channel);
+ 	if (ch_index == INVALID_CHANEL_INDEX) {
+ 		pr_err("%s:channel %d invalid!\n", __func__, channel);
+@@ -1089,7 +1100,9 @@ int sblock_pcfg_open(uint8_t dest, uint8_t channel,
+ 	struct sblock_mgr *sblock;
+ 	uint8_t idx;
+ 	int ret;
++#if (LINUX_VERSION_CODE < KERNEL_VERSION( 5,9,0 ))
+ 	struct sched_param param = {.sched_priority = 11};
++#endif
+ 
+ 	pr_debug("%s: dst=%d channel=%d\n", __func__, dest, channel);
+ 
+@@ -1130,8 +1143,12 @@ int sblock_pcfg_open(uint8_t dest, uint8_t channel,
+ 
+ 		sblock->handler = notifier;
+ 		sblock->data = client;
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION( 5,9,0 ))
++		sched_set_fifo_low(sblock->thread);
++#else
+ 		/*set the thread as a real time thread, and its priority is 11*/
+ 		sched_setscheduler(sblock->thread, SCHED_RR, &param);
++#endif
+ 		wake_up_process(sblock->thread);
+ 	}
+ 
+@@ -1892,6 +1909,7 @@ static const struct file_operations sblock_debug_fops = {
+ 	.release = single_release,
+ };
+ 
++int sblock_init_debugfs(void *root);
+ int sblock_init_debugfs(void *root)
+ {
+ 	if (!root)
+diff --git a/sipc/sbuf.c b/sipc/sbuf.c
+index 2a50b72..8ce6501 100644
+--- a/sipc/sbuf.c
++++ b/sipc/sbuf.c
+@@ -699,7 +699,9 @@ int sbuf_create(u8 dst, u8 channel, u32 bufnum, u32 txbufsize, u32 rxbufsize)
+ 	u8 ch_index;
+ 	int ret;
+ 	struct smsg_ipc *sipc = NULL;
++#if (LINUX_VERSION_CODE < KERNEL_VERSION( 5,9,0 ))
+ 	struct sched_param param = {.sched_priority = 10};
++#endif
+ 
+ 	sipc = smsg_ipcs[dst];
+ 	ch_index = sipc_channel2index(channel);
+@@ -757,8 +759,12 @@ int sbuf_create(u8 dst, u8 channel, u32 bufnum, u32 txbufsize, u32 rxbufsize)
+ 
+ 	sbufs[dst][ch_index] = sbuf;
+ 
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION( 5,9,0 ))
++	sched_set_fifo_low(sbuf->thread);
++#else
+ 	/*set the thread as a real time thread, and its priority is 10*/
+ 	sched_setscheduler(sbuf->thread, SCHED_FIFO, &param);
++#endif
+ 	wake_up_process(sbuf->thread);
+ 
+ 	return 0;
+@@ -908,7 +914,9 @@ int sbuf_write(u8 dst, u8 channel, u32 bufid,
+ 	left = len;
+ 
+ 	if (timeout) {
+-	    mutex_lock_interruptible(&ring->txlock);
++		if (mutex_lock_interruptible(&ring->txlock)) {
++			// return -EINTR;
++		}
+ 	} else {
+ 		if (!mutex_trylock(&ring->txlock)) {
+ 			pr_debug("sbuf_read busy, dst=%d, channel=%d, bufid=%d\n",
+@@ -1134,7 +1142,9 @@ int sbuf_read(u8 dst, u8 channel, u32 bufid,
+ 	left = len;
+ 
+ 	if (timeout) {
+-	    mutex_lock_interruptible(&ring->rxlock);
++		if (mutex_lock_interruptible(&ring->txlock)) {
++			// return -EINTR;
++		}
+ 	} else {
+ 		if (!mutex_trylock(&ring->rxlock)) {
+ 			pr_debug("%s: busy!,dst=%d, channel=%d, bufid=%d\n",
+@@ -1479,13 +1489,25 @@ void sbuf_get_status(u8 dst, char *status_info, int size)
+ 				else
+ 					phead = "select task";
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 14, 0)
++				snprintf(
++					 status_info + len,
++					 size - len,
++					 "%s %d: %s, state=0x%x, pid=%d.\n",
++					 phead,
++					 cnt, task->comm,
++					 task->__state,
++					 task->pid);
++#else
+ 				snprintf(
+ 					 status_info + len,
+ 					 size - len,
+ 					 "%s %d: %s, state=0x%lx, pid=%d.\n",
+ 					 phead,
+ 					 cnt, task->comm,
+-					 task->state, task->pid);
++					 task->state,
++					 task->pid);
++#endif
+ 				cnt++;
+ 				len = strlen(status_info);
+ 			}
+@@ -1567,10 +1589,17 @@ static void sbuf_debug_task_show(struct seq_file *m,
+ 				   n,
+ 				   buf,
+ 				   cnt);
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(5, 14, 0)
++			seq_printf(m, ": %s, state = 0x%x, pid = %d\n",
++				   task->comm,
++				   task->__state,
++				   task->pid);
++#else
+ 			seq_printf(m, ": %s, state = 0x%lx, pid = %d\n",
+ 				   task->comm,
+ 				   task->state,
+ 				   task->pid);
++#endif
+ 			cnt++;
+ 		}
+ 		spin_unlock_irqrestore(
+diff --git a/sipc/sipc.c b/sipc/sipc.c
+index ee256fa..ecf41cd 100644
+--- a/sipc/sipc.c
++++ b/sipc/sipc.c
+@@ -452,14 +452,20 @@ static int sipc_probe(struct platform_device *pdev)
+ 	return 0;
+ }
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
++static void sipc_remove(struct platform_device *pdev)
++#else
+ static int sipc_remove(struct platform_device *pdev)
++#endif
+ {
+ 	struct smsg_ipc *ipc = platform_get_drvdata(pdev);
+ 
+ 	smsg_ipc_destroy(ipc);
+ 
+ 	devm_kfree(&pdev->dev, ipc);
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 13, 0)
+ 	return 0;
++#endif
+ }
+ 
+ #ifdef  SPRD_PCIE_USE_DTS
+@@ -521,4 +527,4 @@ void sipc_exit(void)
+ 	platform_device_unregister(&sipc_device);
+ #endif
+ }
+-EXPORT_SYMBOL_GPL(sipc_exit);
+\ No newline at end of file
++EXPORT_SYMBOL_GPL(sipc_exit);
+diff --git a/sipc/smem.c b/sipc/smem.c
+index 12640c2..ee32d1c 100644
+--- a/sipc/smem.c
++++ b/sipc/smem.c
+@@ -540,6 +540,7 @@ static const struct file_operations smem_debug_fops = {
+ 	.release = single_release,
+ };
+ 
++int smem_init_debugfs(void *root);
+ int smem_init_debugfs(void *root)
+ {
+ 	if (!root)
+diff --git a/sipc/smsg.c b/sipc/smsg.c
+index 051800d..40db180 100644
+--- a/sipc/smsg.c
++++ b/sipc/smsg.c
+@@ -912,7 +912,9 @@ int smsg_recv(u8 dst, struct smsg *msg, int timeout)
+ 			goto recv_failed;
+ 		}
+ 	} else if (timeout < 0) {
+-	    mutex_lock_interruptible(&ch->rxlock);
++		if (mutex_lock_interruptible(&ch->rxlock)) {
++			// return -EINTR;
++		}
+ 		/* wait forever */
+ 		rval = wait_event_interruptible(
+ 				ch->rxwait,
+@@ -935,7 +937,9 @@ int smsg_recv(u8 dst, struct smsg *msg, int timeout)
+ 			goto recv_failed;
+ 		}
+ 	} else {
+-	    mutex_lock_interruptible(&ch->rxlock);
++		if (mutex_lock_interruptible(&ch->rxlock)) {
++			// return -EINTR;
++		}
+ 		/* wait timeout */
+ 		rval = wait_event_interruptible_timeout(
+ 			ch->rxwait,
+diff --git a/sipc/spipe.c b/sipc/spipe.c
+index 7fbd7bc..08ad97b 100644
+--- a/sipc/spipe.c
++++ b/sipc/spipe.c
+@@ -18,6 +18,7 @@
+ #include <linux/poll.h>
+ #include <linux/platform_device.h>
+ #include <linux/slab.h>
++#include <linux/version.h>
+ 
+ #include "../include/sipc.h"
+ #include "sipc_priv.h"
+@@ -302,7 +303,11 @@ static int spipe_probe(struct platform_device *pdev)
+ 	return 0;
+ }
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
++static void spipe_remove(struct platform_device *pdev)
++#else
+ static int  spipe_remove(struct platform_device *pdev)
++#endif
+ {
+ 	struct spipe_device *spipe = platform_get_drvdata(pdev);
+ 	int i;
+@@ -323,7 +328,9 @@ static int  spipe_remove(struct platform_device *pdev)
+ 		platform_set_drvdata(pdev, NULL);
+ 	}
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 13, 0)
+ 	return 0;
++#endif
+ }
+ 
+ #ifdef SPRD_PCIE_USE_DTS
+@@ -439,7 +446,11 @@ int spipe_init(void)
+ {
+ 	int ret;
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
++	spipe_class = class_create("spipe");
++#else
+ 	spipe_class = class_create(THIS_MODULE, "spipe");
++#endif
+ 	if (IS_ERR(spipe_class))
+ 		return PTR_ERR(spipe_class);
+ #ifndef SPRD_PCIE_USE_DTS
+@@ -468,7 +479,7 @@ void spipe_exit(void)
+ 
+ void spipe_device_down(void) 
+ {
+-	int retval = -ENOMEM;
++	// int retval = -ENOMEM;
+ 	int i;
+ 
+     for(i = 0; i < MAX_SPIPE_CHN_NUM; i++) {
+diff --git a/sipc/spool.c b/sipc/spool.c
+index 724dc96..73b81c7 100644
+--- a/sipc/spool.c
++++ b/sipc/spool.c
+@@ -18,6 +18,7 @@
+ #include <linux/poll.h>
+ #include <linux/slab.h>
+ #include <linux/of_device.h>
++#include <linux/version.h>
+ 
+ #include "../include/sipc.h"
+ #include "spool.h"
+@@ -455,7 +456,11 @@ static int spool_probe(struct platform_device *pdev)
+ 	return 0;
+ }
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 13, 0)
++static void spool_remove(struct platform_device *pdev)
++#else
+ static int spool_remove(struct platform_device *pdev)
++#endif
+ {
+ 	struct spool_device *priv = (struct spool_device *)
+ 		platform_get_drvdata(pdev);
+@@ -464,7 +469,9 @@ static int spool_remove(struct platform_device *pdev)
+ 
+ 	platform_set_drvdata(pdev, NULL);
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 13, 0)
+ 	return 0;
++#endif
+ }
+ 
+ #ifdef SPRD_PCIE_USE_DTS
+@@ -501,7 +508,11 @@ int spool_init(void)
+ {
+ 	int ret;
+ 
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 4, 0)
++	spool_class = class_create("spool");
++#else
+ 	spool_class = class_create(THIS_MODULE, "spool");
++#endif
+ 	if (IS_ERR(spool_class))
+ 		return PTR_ERR(spool_class);
+ #ifndef SPRD_PCIE_USE_DTS

@@ -1,0 +1,20 @@
+diff --git a/qmi_wwan_q.c b/qmi_wwan_q.c
+index a2347f0..ce4d006 100644
+--- a/qmi_wwan_q.c
++++ b/qmi_wwan_q.c
+@@ -891,6 +891,7 @@ static struct rtnl_link_stats64 *rmnet_vnd_get_stats64(struct net_device *net, s
+ #endif
+ 
+ #if defined(QUECTEL_UL_DATA_AGG)
++#if (LINUX_VERSION_CODE < KERNEL_VERSION( 6,17,0 ))
+ static void usbnet_bh(unsigned long data) {
+ 	sQmiWwanQmap *pQmapDev = (sQmiWwanQmap *)data;
+ 	struct tasklet_struct *t = &pQmapDev->usbnet_bh;
+@@ -909,6 +910,7 @@ static void usbnet_bh(unsigned long data) {
+ 		qmap_wake_queue((sQmiWwanQmap *)data);
+ 	}
+ }
++#endif
+ 
+ static void rmnet_usb_tx_wake_queue(unsigned long data) {
+ 	qmap_wake_queue((sQmiWwanQmap *)data);

@@ -1,0 +1,306 @@
+diff --git a/controllers/mhi_qti.c b/controllers/mhi_qti.c
+index 21bcd04..a84fe69 100644
+--- a/controllers/mhi_qti.c
++++ b/controllers/mhi_qti.c
+@@ -126,6 +126,7 @@ static const struct firmware_info firmware_table[] = {
+ static int debug_mode;
+ module_param_named(debug_mode, debug_mode, int, 0644);
+ 
++int mhi_debugfs_trigger_m0(void *data, u64 val);
+ int mhi_debugfs_trigger_m0(void *data, u64 val)
+ {
+ 	struct mhi_controller *mhi_cntrl = data;
+@@ -140,6 +141,7 @@ int mhi_debugfs_trigger_m0(void *data, u64 val)
+ DEFINE_SIMPLE_ATTRIBUTE(debugfs_trigger_m0_fops, NULL,
+ 			mhi_debugfs_trigger_m0, "%llu\n");
+ 
++int mhi_debugfs_trigger_m3(void *data, u64 val);
+ int mhi_debugfs_trigger_m3(void *data, u64 val)
+ {
+ 	struct mhi_controller *mhi_cntrl = data;
+@@ -430,7 +432,8 @@ rpm_resume_exit:
+ 	return ret;
+ }
+ 
+-static int mhi_system_resume(struct device *dev)
++int mhi_system_resume(struct device *dev);
++int mhi_system_resume(struct device *dev)
+ {
+ 	int ret = 0;
+ 	struct mhi_controller *mhi_cntrl = dev_get_drvdata(dev);
+@@ -446,6 +449,7 @@ static int mhi_system_resume(struct device *dev)
+ 	return ret;
+ }
+ 
++int mhi_system_suspend(struct device *dev);
+ int mhi_system_suspend(struct device *dev)
+ {
+ 	struct mhi_controller *mhi_cntrl = dev_get_drvdata(dev);
+@@ -1091,11 +1095,13 @@ static struct pci_driver mhi_pcie_driver = {
+ #if 0
+ module_pci_driver(mhi_pcie_driver);
+ #else
++int __init mhi_controller_qcom_init(void);
+ int __init mhi_controller_qcom_init(void)
+ {
+ 	return pci_register_driver(&mhi_pcie_driver);
+ };
+ 
++void mhi_controller_qcom_exit(void);
+ void mhi_controller_qcom_exit(void)
+ {
+ 	pr_info("%s enter\n", __func__);
+@@ -1207,11 +1213,13 @@ void mhi_arch_pcie_deinit(struct mhi_controller *mhi_cntrl)
+ 	mhi_arch_set_bus_request(mhi_cntrl, 0);
+ }
+ 
++int mhi_arch_platform_init(struct mhi_dev *mhi_dev);
+ int mhi_arch_platform_init(struct mhi_dev *mhi_dev)
+ {
+ 	return 0;
+ }
+ 
++void mhi_arch_platform_deinit(struct mhi_dev *mhi_dev);
+ void mhi_arch_platform_deinit(struct mhi_dev *mhi_dev)
+ {
+ }
+diff --git a/core/mhi_boot.c b/core/mhi_boot.c
+index 8f1924f..308efdb 100644
+--- a/core/mhi_boot.c
++++ b/core/mhi_boot.c
+@@ -728,7 +728,7 @@ error_alloc_fw_table:
+ 	release_firmware(firmware);
+ }
+ 
+-int BhiWrite(struct mhi_controller *mhi_cntrl, void __user *ubuf, size_t size)
++static int BhiWrite(struct mhi_controller *mhi_cntrl, void __user *ubuf, size_t size)
+ {
+ 	int ret;
+ 	dma_addr_t dma_addr;
+@@ -818,6 +818,7 @@ error_state:
+ 	return ret;
+ }
+ 
++long bhi_get_dev_info(struct mhi_controller *mhi_cntrl, void __user *ubuf);
+ long bhi_get_dev_info(struct mhi_controller *mhi_cntrl, void __user *ubuf)
+ {
+ 	long ret = -EINVAL;
+@@ -837,6 +838,7 @@ long bhi_get_dev_info(struct mhi_controller *mhi_cntrl, void __user *ubuf)
+ 	return ret;
+ }
+ 
++long bhi_write_image(struct mhi_controller *mhi_cntrl, void __user *ubuf);
+ long bhi_write_image(struct mhi_controller *mhi_cntrl, void __user *ubuf)
+ {
+ 	long ret = -EINVAL;
+diff --git a/core/mhi_dtr.c b/core/mhi_dtr.c
+index 7ce44b3..42842cc 100644
+--- a/core/mhi_dtr.c
++++ b/core/mhi_dtr.c
+@@ -269,6 +269,7 @@ int __init mhi_dtr_init(void)
+ {
+ 	return mhi_driver_register(&mhi_dtr_driver);
+ }
++void mhi_dtr_exit(void);
+ void mhi_dtr_exit(void) {
+ 	mhi_driver_unregister(&mhi_dtr_driver);
+ }
+diff --git a/core/mhi_init.c b/core/mhi_init.c
+index 6d8eec5..6585b52 100644
+--- a/core/mhi_init.c
++++ b/core/mhi_init.c
+@@ -644,7 +644,9 @@ static int mon_text_release(struct inode *inode, struct file *file)
+ static const struct file_operations mon_fops_text_u = {
+ 	.owner =	THIS_MODULE,
+ 	.open =		mon_text_open,
++#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 12, 0)
+ 	.llseek =	no_llseek,
++#endif
+ 	.read =		mon_text_read_u,
+ 	.release =	mon_text_release,
+ };
+@@ -2369,7 +2371,11 @@ void mhi_unprepare_after_power_down(struct mhi_controller *mhi_cntrl)
+ }
+ 
+ /* match dev to drv */
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 0)
++static int mhi_match(struct device *dev, const struct device_driver *drv)
++#else
+ static int mhi_match(struct device *dev, struct device_driver *drv)
++#endif
+ {
+ 	struct mhi_device *mhi_dev = to_mhi_device(dev);
+ 	struct mhi_driver *mhi_drv = to_mhi_driver(drv);
+@@ -2691,7 +2697,7 @@ static int __init mhi_cntrl_init(void)
+ 	return 0;
+ }
+ 
+-void mhi_cntrl_exit(void)
++static void mhi_cntrl_exit(void)
+ {
+ 	class_destroy(mhi_cntrl_drv.class);
+ 	unregister_chrdev(mhi_cntrl_drv.major, MHI_CNTRL_DRIVER_NAME);
+diff --git a/core/mhi_main.c b/core/mhi_main.c
+index 12d44e6..23e7326 100644
+--- a/core/mhi_main.c
++++ b/core/mhi_main.c
+@@ -291,7 +291,7 @@ static void *mhi_to_virtual(struct mhi_ring *ring, dma_addr_t addr)
+ 	return (addr - ring->iommu_base) + ring->base;
+ }
+ 
+-dma_addr_t mhi_to_physical(struct mhi_ring *ring, void *addr)
++static dma_addr_t mhi_to_physical(struct mhi_ring *ring, void *addr)
+ {
+ 	return (addr - ring->base) + ring->iommu_base;
+ }
+@@ -2587,6 +2587,12 @@ EXPORT_SYMBOL(mhi_get_remote_time_sync);
+  * @sequence:unique sequence id track event
+  * @cb_func: callback function to call back
+  */
++int mhi_get_remote_time(struct mhi_device *mhi_dev,
++			u32 sequence,
++			void (*cb_func)(struct mhi_device *mhi_dev,
++					u32 sequence,
++					u64 local_time,
++					u64 remote_time));
+ int mhi_get_remote_time(struct mhi_device *mhi_dev,
+ 			u32 sequence,
+ 			void (*cb_func)(struct mhi_device *mhi_dev,
+diff --git a/core/mhi_pm.c b/core/mhi_pm.c
+index 117a600..b1c0afa 100644
+--- a/core/mhi_pm.c
++++ b/core/mhi_pm.c
+@@ -153,6 +153,7 @@ void mhi_set_mhi_state(struct mhi_controller *mhi_cntrl,
+ }
+ 
+ /* set device wake */
++void mhi_assert_dev_wake(struct mhi_controller *mhi_cntrl, bool force);
+ void mhi_assert_dev_wake(struct mhi_controller *mhi_cntrl, bool force)
+ {
+ 	unsigned long flags;
+@@ -193,6 +194,7 @@ void mhi_assert_dev_wake(struct mhi_controller *mhi_cntrl, bool force)
+ }
+ 
+ /* clear device wake */
++void mhi_deassert_dev_wake(struct mhi_controller *mhi_cntrl, bool override);
+ void mhi_deassert_dev_wake(struct mhi_controller *mhi_cntrl, bool override)
+ {
+ 	unsigned long flags;
+diff --git a/devices/mhi_netdev_quectel.c b/devices/mhi_netdev_quectel.c
+index a423779..bf7d972 100644
+--- a/devices/mhi_netdev_quectel.c
++++ b/devices/mhi_netdev_quectel.c
+@@ -31,6 +31,10 @@
+ #include <net/tcp.h>
+ #include <linux/usb/cdc.h>
+ 
++#ifndef strlcpy
++#define strlcpy(dest, src, size) strscpy(dest, src, size)
++#endif
++
+ //#define CONFIG_IPQ5018_RATE_CONTROL //Only used with spf11.5 for IPQ5018
+ #if defined(CONFIG_IPQ5018_RATE_CONTROL)
+ //#include <linux/jiffies.h>
+@@ -76,6 +80,7 @@ extern struct rmnet_nss_cb *rmnet_nss_callbacks __rcu __read_mostly;
+ #endif
+ 
+ 
++int mhi_netdev_use_xfer_type_dma(unsigned chan);
+ int mhi_netdev_use_xfer_type_dma(unsigned chan)
+ {
+ 	(void)chan;
+@@ -210,6 +215,7 @@ static void qmap_hex_dump(const char *tag, unsigned char *data, unsigned len) {
+ 
+ static uint __read_mostly mhi_mbim_enabled = 0;
+ module_param(mhi_mbim_enabled, uint, S_IRUGO);
++int mhi_netdev_mbin_enabled(void);
+ int mhi_netdev_mbin_enabled(void) { return mhi_mbim_enabled; }
+ 
+ static uint __read_mostly qmap_mode = 1;
+@@ -1653,8 +1659,12 @@ static struct net_device * rmnet_vnd_register_device(struct mhi_netdev *pQmapDev
+ 
+ 	priv->agg_skb = NULL;
+ 	priv->agg_count = 0;
++#if LINUX_VERSION_CODE >= KERNEL_VERSION(6, 15, 0)
++	hrtimer_setup(&priv->agg_hrtimer, rmnet_vnd_tx_agg_timer_cb, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
++#else
+ 	hrtimer_init(&priv->agg_hrtimer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
+ 	priv->agg_hrtimer.function = rmnet_vnd_tx_agg_timer_cb;
++#endif
+ 	INIT_WORK(&priv->agg_wq, rmnet_vnd_tx_agg_work);
+ 	ktime_get_ts64(&priv->agg_time);
+ 	spin_lock_init(&priv->agg_lock);
+@@ -3390,6 +3400,7 @@ static struct mhi_driver mhi_netdev_driver = {
+ 	}
+ };
+ 
++int __init mhi_device_netdev_init(struct dentry *parent);
+ int __init mhi_device_netdev_init(struct dentry *parent)
+ {
+ #ifdef CONFIG_QCA_NSS_DRV
+@@ -3404,6 +3415,7 @@ int __init mhi_device_netdev_init(struct dentry *parent)
+ 	return mhi_driver_register(&mhi_netdev_driver);
+ }
+ 
++void mhi_device_netdev_exit(void);
+ void mhi_device_netdev_exit(void)
+ {
+ #ifdef CONFIG_DEBUG_FS
+@@ -3412,6 +3424,7 @@ void mhi_device_netdev_exit(void)
+ 	mhi_driver_unregister(&mhi_netdev_driver);
+ }
+ 
++void mhi_netdev_quectel_avoid_unused_function(void);
+ void mhi_netdev_quectel_avoid_unused_function(void) {
+ #ifdef CONFIG_USE_RMNET_DATA_FOR_SKIP_MEMCPY
+ 	qmap_hex_dump(NULL, NULL, 0);
+diff --git a/devices/mhi_uci.c b/devices/mhi_uci.c
+index 474b022..887ee36 100644
+--- a/devices/mhi_uci.c
++++ b/devices/mhi_uci.c
+@@ -100,21 +100,29 @@ module_param( uci_msg_lvl, uint, S_IRUGO | S_IWUSR);
+ 
+ #if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 1, 0))
+ #ifdef TCGETS2
++__weak int user_termios_to_kernel_termios(struct ktermios *k,
++						 struct termios2 __user *u);
+ __weak int user_termios_to_kernel_termios(struct ktermios *k,
+ 						 struct termios2 __user *u)
+ {
+ 	return copy_from_user(k, u, sizeof(struct termios2));
+ }
++__weak int kernel_termios_to_user_termios(struct termios2 __user *u,
++						 struct ktermios *k);
+ __weak int kernel_termios_to_user_termios(struct termios2 __user *u,
+ 						 struct ktermios *k)
+ {
+ 	return copy_to_user(u, k, sizeof(struct termios2));
+ }
++__weak int user_termios_to_kernel_termios_1(struct ktermios *k,
++						   struct termios __user *u);
+ __weak int user_termios_to_kernel_termios_1(struct ktermios *k,
+ 						   struct termios __user *u)
+ {
+ 	return copy_from_user(k, u, sizeof(struct termios));
+ }
++__weak int kernel_termios_to_user_termios_1(struct termios __user *u,
++						   struct ktermios *k);
+ __weak int kernel_termios_to_user_termios_1(struct termios __user *u,
+ 						   struct ktermios *k)
+ {
+@@ -942,6 +950,7 @@ static struct mhi_driver mhi_uci_driver = {
+ 	},
+ };
+ 
++int mhi_device_uci_init(void);
+ int mhi_device_uci_init(void)
+ {
+ 	int ret;
+@@ -973,6 +982,7 @@ int mhi_device_uci_init(void)
+ 	return ret;
+ }
+ 
++void mhi_device_uci_exit(void);
+ void mhi_device_uci_exit(void)
+ {
+ 	mhi_driver_unregister(&mhi_uci_driver);
